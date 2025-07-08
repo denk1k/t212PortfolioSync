@@ -17,7 +17,6 @@ async function makeApiCall(url, method, body = null) {
     }
     const cookieString = cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
 
-    // NOTE: This accountId is hardcoded from your cURL example.
     const accountId = "33029497";
 
     const headers = {
@@ -46,7 +45,6 @@ async function makeApiCall(url, method, body = null) {
 // Main function to handle the entire rebalancing logic
 async function rebalancePortfolio(targetAllocations) {
     try {
-        // Step 1: Fetch initial account summary
         sendLog('Fetching initial account summary...');
         let summary = await makeApiCall('https://demo.services.trading212.com/rest/trading/invest/v2/accounts/summary', 'POST', []);
 
@@ -68,7 +66,7 @@ async function rebalancePortfolio(targetAllocations) {
             const currentValue = current ? current.value : 0;
             const difference = targetValue - currentValue;
 
-            if (difference < -1.00) { // Only consider sells (negative difference)
+            if (difference < -1.00) {
                 sellOrders.push({ ticker, difference, currentQuantity: current.quantity, currentValue: current.value });
             }
         });
@@ -77,15 +75,21 @@ async function rebalancePortfolio(targetAllocations) {
             sendLog(`Found ${sellOrders.length} sell orders to execute.`, 'orange');
             for (const order of sellOrders) {
                 let quantityToSell;
-                const isLiquidating = !targetAllocations.some(a => a.ticker === order.ticker && a.allocation > 0);
+                const isLiquidatingCompletely = !targetAllocations.some(a => a.ticker === order.ticker && a.allocation > 0);
+                const valueToSell = Math.abs(order.difference);
+                const remainingValue = order.currentValue - valueToSell;
 
-                if (isLiquidating) {
-                    quantityToSell = order.currentQuantity; // Sell entire position
-                    sendLog(`  - LIQUIDATING ${quantityToSell.toFixed(6)} of ${order.ticker}`);
+                // *** FIX: If remaining value is < €1.00, liquidate the whole position ***
+                if (isLiquidatingCompletely || (remainingValue > 0 && remainingValue < 1.00)) {
+                    quantityToSell = order.currentQuantity;
+                    if (!isLiquidatingCompletely) {
+                        sendLog(`  ! Remaining value for ${order.ticker} would be too small (€${remainingValue.toFixed(2)}). Liquidating instead.`);
+                    }
+                    sendLog(`  - LIQUIDATING ${quantityToSell} of ${order.ticker}`);
                 } else {
-                    // Calculate quantity to sell based on the value difference
-                    quantityToSell = (Math.abs(order.difference) / order.currentValue) * order.currentQuantity;
-                    sendLog(`  - SELLING ${quantityToSell.toFixed(6)} of ${order.ticker} (value ~€${Math.abs(order.difference).toFixed(2)})`);
+                    const calculatedQty = (valueToSell / order.currentValue) * order.currentQuantity;
+                    quantityToSell = parseFloat(calculatedQty.toFixed(4));
+                    sendLog(`  - SELLING ${quantityToSell} of ${order.ticker} (value ~€${valueToSell.toFixed(2)})`);
                 }
 
                 const sellPayload = { instrumentCode: order.ticker, orderType: "MARKET", quantity: -quantityToSell, timeValidity: "GOOD_TILL_CANCEL" };
@@ -98,7 +102,7 @@ async function rebalancePortfolio(targetAllocations) {
                 }
 
                 sendLog('    ...waiting 1 second...');
-                await delay(1000); // Wait 1 second after each request
+                await delay(1000);
             }
         } else {
             sendLog('No sell orders needed.');
@@ -113,8 +117,10 @@ async function rebalancePortfolio(targetAllocations) {
             acc[pos.code] = { value: pos.value, quantity: pos.quantity };
             return acc;
         }, {});
-        let updatedEquity = summary.cash.total;
-        sendLog(`New account equity is €${updatedEquity.toFixed(2)}`, 'blue');
+
+        let investableCash = summary.cash.investPot;
+        let totalPortfolioValue = summary.cash.total;
+        sendLog(`Account total value: €${totalPortfolioValue.toFixed(2)}; Investable cash: €${investableCash.toFixed(2)}`, 'blue');
 
         const buyOrders = [];
         const finalTickers = new Set([...Object.keys(updatedPositions), ...targetAllocations.map(a => a.ticker)]);
@@ -122,11 +128,11 @@ async function rebalancePortfolio(targetAllocations) {
         finalTickers.forEach(ticker => {
             const target = targetAllocations.find(a => a.ticker === ticker);
             const current = updatedPositions[ticker];
-            const targetValue = updatedEquity * (target ? target.allocation : 0);
+            const targetValue = totalPortfolioValue * (target ? target.allocation : 0);
             const currentValue = current ? current.value : 0;
             const difference = targetValue - currentValue;
 
-            if (difference > 1.00) { // Only consider buys (positive difference)
+            if (difference > 1.00) {
                 buyOrders.push({ ticker, valueToBuy: difference });
             }
         });
@@ -134,18 +140,38 @@ async function rebalancePortfolio(targetAllocations) {
         if (buyOrders.length > 0) {
             sendLog(`Found ${buyOrders.length} buy orders to execute.`, 'orange');
             for (const order of buyOrders) {
-                const buyPayload = { currency: "EUR", instrumentCode: order.ticker, value: order.valueToBuy, orderType: "MARKET", timeValidity: "GOOD_TILL_CANCEL" };
-                sendLog(`  - BUYING €${order.valueToBuy.toFixed(2)} of ${order.ticker}`);
+                const valueToBuy = parseFloat(order.valueToBuy.toFixed(2));
+                let buyPayload = { currency: "EUR", instrumentCode: order.ticker, value: valueToBuy, orderType: "MARKET", timeValidity: "GOOD_TILL_CANCEL" };
+
+                sendLog(`  - Attempting to BUY €${valueToBuy.toFixed(2)} of ${order.ticker}`);
 
                 try {
                     await makeApiCall('https://demo.services.trading212.com/rest/v1/equity/value-order', 'POST', buyPayload);
                     sendLog(`    ✔ SUCCESS: Buy order for ${order.ticker} placed.`, 'green');
                 } catch (err) {
-                    sendLog(`    ✖ FAILED to buy ${order.ticker}: ${err.message}`, 'red');
+                    if (err.message && err.message.includes('must buy at most')) {
+                        sendLog(`    ! API limit hit. Retrying with suggested value...`, 'orange');
+                        const match = err.message.match(/(\d+\.\d+)/);
+                        if (match && match[1]) {
+                            const adjustedValue = parseFloat(match[1]);
+                            buyPayload.value = adjustedValue;
+                            sendLog(`    - ADJUSTED BUY of €${adjustedValue.toFixed(2)} for ${order.ticker}`);
+                            try {
+                                await makeApiCall('https://demo.services.trading212.com/rest/v1/equity/value-order', 'POST', buyPayload);
+                                sendLog(`    ✔ SUCCESS: Adjusted buy order for ${order.ticker} placed.`, 'green');
+                            } catch (retryErr) {
+                                sendLog(`    ✖ FAILED on retry for ${order.ticker}: ${retryErr.message}`, 'red');
+                            }
+                        } else {
+                            sendLog(`    ✖ FAILED to parse adjusted value from error: ${err.message}`, 'red');
+                        }
+                    } else {
+                        sendLog(`    ✖ FAILED to buy ${order.ticker}: ${err.message}`, 'red');
+                    }
                 }
 
                 sendLog('    ...waiting 1 second...');
-                await delay(1000); // Wait 1 second after each request
+                await delay(1000);
             }
         } else {
             sendLog('No buy orders needed.');
@@ -158,10 +184,9 @@ async function rebalancePortfolio(targetAllocations) {
     }
 }
 
-// Listen for the rebalance command from the popup
 chrome.runtime.onMessage.addListener((request) => {
     if (request.action === 'rebalancePortfolio') {
         rebalancePortfolio(request.payload.allocations);
-        return true; // Indicates an asynchronous response
+        return true;
     }
 });

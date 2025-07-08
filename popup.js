@@ -34,14 +34,16 @@ document.addEventListener('DOMContentLoaded', () => {
                 });
 
                 const totalAllocation = allocations.reduce((sum, item) => sum + item.allocation, 0);
-                if (Math.abs(totalAllocation - 1.0) > 0.001) {
-                    throw new Error(`Total allocation is ${totalAllocation.toFixed(4)}, but must be 1.0.`);
+
+                // This check is now less strict. We just make sure it's not over 100%.
+                if (totalAllocation > 1.001) {
+                    throw new Error(`Total allocation is ${totalAllocation.toFixed(4)}, but must not exceed 1.0.`);
                 }
 
                 parsedData = allocations;
                 rebalanceButton.disabled = false;
                 log('CSV file loaded and validated successfully.', 'green');
-                log(`Found ${allocations.length} target allocations.`);
+                log(`Found ${allocations.length} target allocations summing to ${totalAllocation.toFixed(2)}.`, 'blue');
 
             } catch (error) {
                 log(`Error parsing CSV: ${error.message}`, 'red');
