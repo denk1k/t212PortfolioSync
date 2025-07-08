@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>T212 Portfolio Rebalancer</title>
+    <style>
+        body { font-family: sans-serif; width: 380px; padding: 15px; }
+        h3 { margin-top: 0; }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; margin-bottom: 5px; font-weight: bold; }
+        p.info { font-size: 12px; margin: 0 0 5px 0; color: #555; }
+        input[type="file"] { width: 100%; box-sizing: border-box; }
+        button { width: 100%; padding: 10px; cursor: pointer; background-color: #007bff; color: white; border: none; border-radius: 4px; font-size: 14px; }
+        button:disabled { background-color: #ccc; cursor: not-allowed; }
+        #log-container { margin-top: 15px; background-color: #f5f5f5; border: 1px solid #ddd; padding: 10px; height: 250px; overflow-y: auto; font-family: monospace; font-size: 12px; white-space: pre-wrap; line-height: 1.5; }
+    </style>
+</head>
+<body>
+<h3>Portfolio Rebalancer</h3>
+<div class="form-group">
+    <label for="csvFile">Upload Target Allocations (CSV)</label>
+    <p class="info">Format: ticker_code,percentage (e.g., AAPL_US_EQ,0.25)</p>
+    <p class="info">The sum of percentages must equal 1.0.</p>
+    <input type="file" id="csvFile" accept=".csv">
+</div>
+<button id="rebalanceButton" disabled>Rebalance Portfolio</button>
+<div id="log-container">Awaiting instructions...</div>
+<script src="popup.js"></script>
+</body>
+</html>

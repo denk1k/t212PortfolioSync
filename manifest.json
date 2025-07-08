@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "T212 Portfolio Rebalancer",
+  "version": "2.0",
+  "description": "Rebalances a Trading 212 portfolio based on a target allocation CSV.",
+  "permissions": [
+    "cookies",
+    "storage"
+  ],
+  "host_permissions": [
+    "https://*.trading212.com/"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "images/icon16.png",
+      "48": "images/icon48.png",
+      "128": "images/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "images/icon16.png",
+    "48": "images/icon48.png",
+    "128": "images/icon128.png"
+  }
+}
