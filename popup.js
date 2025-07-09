@@ -4,7 +4,6 @@ document.addEventListener('DOMContentLoaded', () => {
     const logContainer = document.getElementById('log-container');
     let parsedData = null;
 
-    // Function to add messages to the log area
     const log = (message, color = 'black') => {
         const timestamp = new Date().toLocaleTimeString();
         logContainer.innerHTML += `<span style="color: ${color};">[${timestamp}] ${message}</span>\n`;
@@ -65,7 +64,6 @@ document.addEventListener('DOMContentLoaded', () => {
         logContainer.innerHTML = ''; // Clear logs
         log('Starting rebalance process...');
 
-        // Send the validated data to the background script to start the process
         chrome.runtime.sendMessage({
             action: 'rebalancePortfolio',
             payload: { allocations: parsedData }

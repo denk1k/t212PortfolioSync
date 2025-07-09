@@ -42,13 +42,11 @@ async function makeApiCall(url, method, body = null) {
     return responseData;
 }
 
-// Main function to handle the entire rebalancing logic
 async function rebalancePortfolio(targetAllocations) {
     try {
         sendLog('Fetching initial account summary...');
         let summary = await makeApiCall('https://demo.services.trading212.com/rest/trading/invest/v2/accounts/summary', 'POST', []);
 
-        // --- SELL PHASE ---
         sendLog('Phase 1: Calculating and executing sell orders...');
         let initialPositions = summary.open.items.reduce((acc, pos) => {
             acc[pos.code] = { value: pos.value, quantity: pos.quantity };
@@ -108,7 +106,6 @@ async function rebalancePortfolio(targetAllocations) {
             sendLog('No sell orders needed.');
         }
 
-        // --- BUY PHASE ---
         sendLog('Phase 2: Calculating and executing buy orders...');
         sendLog('Re-fetching account state to ensure accurate buy calculations...');
         summary = await makeApiCall('https://demo.services.trading212.com/rest/trading/invest/v2/accounts/summary', 'POST', []);
