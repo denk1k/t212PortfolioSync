@@ -5,7 +5,8 @@
   "description": "Rebalances a Trading 212 portfolio based on a target allocation CSV.",
   "permissions": [
     "cookies",
-    "storage"
+    "storage",
+    "scripting"
   ],
   "host_permissions": [
     "https://*.trading212.com/"
