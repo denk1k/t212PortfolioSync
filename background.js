@@ -1,3 +1,4 @@
+// A helper to pause execution for a specified time
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
 // A helper to send log updates to the popup
@@ -8,15 +9,42 @@ const sendLog = (message, color = 'black', isFinal = false) => {
     }).catch(() => console.log("Could not send log to popup, it might be closed."));
 };
 
+async function getAccountMode() {
+    const tabs = await chrome.tabs.query({
+        active: true,
+        url: "*://app.trading212.com/*"
+    });
+
+    if (tabs.length === 0) {
+        throw new Error("No active Trading 212 tab found. Please navigate to the T212 web app.");
+    }
+    const tabId = tabs[0].id;
+
+    const results = await chrome.scripting.executeScript({
+        target: { tabId: tabId },
+        func: () => localStorage.getItem('lastLogInSubSystem'),
+    });
+
+    if (!results || results.length === 0 || !results[0].result) {
+        throw new Error("Could not determine account mode. Is 'lastLogInSubSystem' set in localStorage?");
+    }
+
+    const mode = results[0].result.replace(/"/g, '').toUpperCase();
+    if (mode !== 'LIVE' && mode !== 'DEMO') {
+        throw new Error(`Unknown account mode detected: ${mode}`);
+    }
+
+    return mode;
+}
+
+
 // A helper for making authenticated API calls to Trading 212
 async function makeApiCall(url, method, body = null) {
     const cookies = await chrome.cookies.getAll({ domain: "trading212.com" });
-    if (cookies.length === 0) {
-        throw new Error("No Trading 212 cookies found. Please log in.");
-    }
-    const cookieString = cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
+    if (cookies.length === 0) throw new Error("No Trading 212 cookies found. Please log in.");
 
-    const accountId = "33029497";
+    const cookieString = cookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
+    const accountId = "33029497"; // This may need to be fetched dynamically in a future version
 
     const headers = {
         'Accept': 'application/json',
@@ -41,11 +69,20 @@ async function makeApiCall(url, method, body = null) {
     return responseData;
 }
 
+// Main function to handle the entire rebalancing logic
 async function rebalancePortfolio(targetAllocations) {
     try {
-        sendLog('Fetching initial account summary...');
-        let summary = await makeApiCall('https://demo.services.trading212.com/rest/trading/invest/v2/accounts/summary', 'POST', []);
+        // --- Step 1: Determine Environment and Set Base URL ---
+        const mode = await getAccountMode();
+        const baseUrl = `https://` + (mode === 'LIVE' ? 'live' : 'demo') + `.services.trading212.com`;
 
+        const color = mode === 'LIVE' ? 'red' : 'blue';
+        sendLog(`--- OPERATING IN ${mode} MODE ---`, color);
+
+        sendLog('Fetching initial account summary...');
+        let summary = await makeApiCall(`${baseUrl}/rest/trading/invest/v2/accounts/summary`, 'POST', []);
+
+        // --- SELL PHASE ---
         sendLog('Phase 1: Calculating and executing sell orders...');
         let initialPositions = summary.open.items.reduce((acc, pos) => {
             acc[pos.code] = { value: pos.value, quantity: pos.quantity };
@@ -76,7 +113,6 @@ async function rebalancePortfolio(targetAllocations) {
                 const valueToSell = Math.abs(order.difference);
                 const remainingValue = order.currentValue - valueToSell;
 
-                // *** FIX: If remaining value is < €1.00, liquidate the whole position ***
                 if (isLiquidatingCompletely || (remainingValue > 0 && remainingValue < 1.00)) {
                     quantityToSell = order.currentQuantity;
                     if (!isLiquidatingCompletely) {
@@ -92,7 +128,7 @@ async function rebalancePortfolio(targetAllocations) {
                 const sellPayload = { instrumentCode: order.ticker, orderType: "MARKET", quantity: -quantityToSell, timeValidity: "GOOD_TILL_CANCEL" };
 
                 try {
-                    await makeApiCall('https://demo.services.trading212.com/rest/public/v2/equity/order', 'POST', sellPayload);
+                    await makeApiCall(`${baseUrl}/rest/public/v2/equity/order`, 'POST', sellPayload);
                     sendLog(`    ✔ SUCCESS: Sell order for ${order.ticker} placed.`, 'green');
                 } catch (err) {
                     sendLog(`    ✖ FAILED to sell ${order.ticker}: ${err.message}`, 'red');
@@ -105,18 +141,18 @@ async function rebalancePortfolio(targetAllocations) {
             sendLog('No sell orders needed.');
         }
 
+        // --- BUY PHASE ---
         sendLog('Phase 2: Calculating and executing buy orders...');
         sendLog('Re-fetching account state to ensure accurate buy calculations...');
-        summary = await makeApiCall('https://demo.services.trading212.com/rest/trading/invest/v2/accounts/summary', 'POST', []);
+        summary = await makeApiCall(`${baseUrl}/rest/trading/invest/v2/accounts/summary`, 'POST', []);
 
         let updatedPositions = summary.open.items.reduce((acc, pos) => {
             acc[pos.code] = { value: pos.value, quantity: pos.quantity };
             return acc;
         }, {});
-
         let investableCash = summary.cash.investPot;
         let totalPortfolioValue = summary.cash.total;
-        sendLog(`Account total value: €${totalPortfolioValue.toFixed(2)}; Investable cash: €${investableCash.toFixed(2)}`, 'blue');
+        sendLog(`Account total value: €${totalPortfolioValue.toFixed(2)}; ; Investable cash: €${investableCash.toFixed(2)}`, 'blue');
 
         const buyOrders = [];
         const finalTickers = new Set([...Object.keys(updatedPositions), ...targetAllocations.map(a => a.ticker)]);
@@ -142,7 +178,7 @@ async function rebalancePortfolio(targetAllocations) {
                 sendLog(`  - Attempting to BUY €${valueToBuy.toFixed(2)} of ${order.ticker}`);
 
                 try {
-                    await makeApiCall('https://demo.services.trading212.com/rest/v1/equity/value-order', 'POST', buyPayload);
+                    await makeApiCall(`${baseUrl}/rest/v1/equity/value-order`, 'POST', buyPayload);
                     sendLog(`    ✔ SUCCESS: Buy order for ${order.ticker} placed.`, 'green');
                 } catch (err) {
                     if (err.message && err.message.includes('must buy at most')) {
@@ -153,7 +189,7 @@ async function rebalancePortfolio(targetAllocations) {
                             buyPayload.value = adjustedValue;
                             sendLog(`    - ADJUSTED BUY of €${adjustedValue.toFixed(2)} for ${order.ticker}`);
                             try {
-                                await makeApiCall('https://demo.services.trading212.com/rest/v1/equity/value-order', 'POST', buyPayload);
+                                await makeApiCall(`${baseUrl}/rest/v1/equity/value-order`, 'POST', buyPayload);
                                 sendLog(`    ✔ SUCCESS: Adjusted buy order for ${order.ticker} placed.`, 'green');
                             } catch (retryErr) {
                                 sendLog(`    ✖ FAILED on retry for ${order.ticker}: ${retryErr.message}`, 'red');
@@ -180,10 +216,9 @@ async function rebalancePortfolio(targetAllocations) {
     }
 }
 
-chrome.runtime.onMessage.addListener((request) => {
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'rebalancePortfolio') {
         rebalancePortfolio(request.payload.allocations);
-        return true;
+        return true; // Indicates an asynchronous response
     }
 });
-
