@@ -1,3 +1,4 @@
+![T212PortfolioSync Logo](/images/icon128.png)
 # t212PortfolioSync
 
 A Chrome extension that syncs your live Trading 212 portfolio to allocations defined in a CSV file.
