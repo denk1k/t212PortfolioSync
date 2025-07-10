@@ -1,4 +1,3 @@
-// A helper to pause execution for a specified time
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
 // A helper to send log updates to the popup
@@ -187,3 +186,4 @@ chrome.runtime.onMessage.addListener((request) => {
         return true;
     }
 });
+
