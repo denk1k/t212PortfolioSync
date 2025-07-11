@@ -209,14 +209,23 @@ async function rebalancePortfolio(targetAllocations) {
                     if (err.message && err.message.includes('must buy at most')) {
                         const match = err.message.match(/(\d+\.?\d*)/);
                         if (match && match[1]) {
-                            buyPayload.value = parseFloat(match[1]);
-                            sendLog(`    ! API limit hit. Retrying with adjusted value of €${buyPayload.value.toFixed(2)}...`, 'orange');
-                            try {
-                                await makeApiCall(`${baseUrl}/rest/v1/equity/value-order`, 'POST', accountInfo, buyPayload);
-                                sendLog(`    ✔ SUCCESS: Adjusted buy order placed.`, 'green');
-                            } catch (retryErr) {
-                                sendLog(`    ✖ FAILED on retry for ${order.ticker}: ${retryErr.message}`, 'red');
+                            const adjustedValue = parseFloat(match[1]);
+
+                            // Check if adjusted value is sufficient before retrying
+                            if (adjustedValue >= 1.00) {
+                                buyPayload.value = adjustedValue;
+                                sendLog(`    ! API limit hit. Retrying with adjusted value of €${adjustedValue.toFixed(2)}...`, 'orange');
+                                try {
+                                    await makeApiCall(`${baseUrl}/rest/v1/equity/value-order`, 'POST', accountInfo, buyPayload);
+                                    sendLog(`    ✔ SUCCESS: Adjusted buy order placed.`, 'green');
+                                } catch (retryErr) {
+                                    sendLog(`    ✖ FAILED on retry for ${order.ticker}: ${retryErr.message}`, 'red');
+                                }
+                            } else {
+                                sendLog(`    ✖ Adjusted buy value (€${adjustedValue.toFixed(2)}) is below minimum. Skipping retry for ${order.ticker}.`, 'red');
                             }
+                        } else {
+                            sendLog(`    ✖ FAILED to parse adjusted value from error: ${err.message}`, 'red');
                         }
                     } else {
                         sendLog(`    ✖ FAILED to buy ${order.ticker}: ${err.message}`, 'red');
