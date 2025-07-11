@@ -35,3 +35,7 @@ A Chrome extension that syncs your demo/live Trading 212 portfolio to allocation
 -   [ ] **Mild:** Develop a Python interop extension to allow for a true algorithmic trading experience.
 -   [ ] **Mild:** Allow the user to enter common stock tickers (e.g., AAPL, MSFT), which the script would then resolve to the correct T212 instrument code using public APIs.
 -   [ ] **Mild:** Create a better notification tray where the user can see any failed orders at a glance.
+
+## ⚠️ Disclaimer
+
+*   **I am not responsible for any losses incurred while using this script. Use at your own risk.**
