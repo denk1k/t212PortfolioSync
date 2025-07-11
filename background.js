@@ -10,46 +10,55 @@ const sendLog = (message, color = 'black', isFinal = false) => {
 };
 
 async function getAccountInfo() {
-    const tabs = await chrome.tabs.query({
-        active: true,
-        url: "*://app.trading212.com/*"
-    });
-
+    const tabs = await chrome.tabs.query({ active: true, url: "*://app.trading212.com/*" });
     if (tabs.length === 0) {
         throw new Error("No active Trading 212 tab found. Please navigate to the T212 web app.");
     }
     const tabId = tabs[0].id;
-
-    // Inject a script to get both items from localStorage at once
-    const results = await chrome.scripting.executeScript({
+    const storageResults = await chrome.scripting.executeScript({
         target: { tabId: tabId },
-        func: () => {
-            return {
-                mode: localStorage.getItem('lastLogInSubSystem'),
-                accountId: localStorage.getItem('lastLogInAccountId')
-            };
-        },
+        func: () => ({
+            mode: localStorage.getItem('lastLogInSubSystem'),
+            accountId: localStorage.getItem('lastLogInAccountId')
+        }),
     });
 
-    const data = results[0].result;
-    if (!data || !data.mode || !data.accountId) {
-        throw new Error("Could not determine account mode or ID from localStorage.");
-    }
+    const data = storageResults[0].result;
+    if (!data || !data.mode || !data.accountId) throw new Error("Could not determine account mode or ID from localStorage.");
 
-    // Clean up the retrieved strings by removing quotes
     const mode = data.mode.replace(/"/g, '').toUpperCase();
     const accountId = data.accountId.replace(/"/g, '');
+    if ((mode !== 'LIVE' && mode !== 'DEMO') || !accountId) throw new Error(`Invalid account info from storage: Mode='${mode}', AccountID='${accountId}'`);
 
-    if ((mode !== 'LIVE' && mode !== 'DEMO') || !accountId) {
-        throw new Error(`Invalid account info detected: Mode='${mode}', AccountID='${accountId}'`);
+    let dUUID = null;
+    const cookies = await chrome.cookies.getAll({ domain: "app.trading212.com" });
+    const uuidRegex = /^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/;
+
+    for (const cookie of cookies) {
+        if (cookie.value) {
+            try {
+                const decodedValue = decodeURIComponent(cookie.value);
+                const potentialUUID = decodedValue.replace(/"/g, '');
+                if (uuidRegex.test(potentialUUID)) {
+                    dUUID = potentialUUID;
+                    sendLog(`Found dUUID in cookie '${cookie.name}'.`, 'gray');
+                    break;
+                }
+            } catch (e) {
+                // Ignore cookies with malformed URI encoding.
+            }
+        }
     }
 
-    return { mode, accountId };
+    if (!dUUID) {
+        dUUID = crypto.randomUUID();
+        sendLog(`Could not find dUUID in cookies. Generated a new one for this session.`, 'orange');
+    }
+
+    return { mode, accountId, dUUID };
 }
 
-
-// A helper for making authenticated API calls to Trading 212
-async function makeApiCall(url, method, accountId, body = null) {
+async function makeApiCall(url, method, { accountId, dUUID }, body = null) {
     const cookies = await chrome.cookies.getAll({ domain: "trading212.com" });
     if (cookies.length === 0) throw new Error("No Trading 212 cookies found. Please log in.");
 
@@ -59,7 +68,7 @@ async function makeApiCall(url, method, accountId, body = null) {
         'Accept': 'application/json',
         'Content-Type': 'application/json',
         'Cookie': cookieString,
-        'X-Trader-Client': `application=WC4,version=7.83.0,dUUID=4e354fd1-83c7-4edc-a49d-620c3eaa9cd9,accountId=${accountId}`
+        'X-Trader-Client': `application=WC4,version=7.83.0,dUUID=${dUUID},accountId=${accountId}`
     };
 
     const options = { method, headers };
@@ -82,14 +91,14 @@ async function makeApiCall(url, method, accountId, body = null) {
 async function rebalancePortfolio(targetAllocations) {
     try {
         // --- Step 1: Determine Environment and Account ID ---
-        const { mode, accountId } = await getAccountInfo();
-        const baseUrl = `https://` + (mode === 'LIVE' ? 'live' : 'demo') + `.services.trading212.com`;
+        const accountInfo = await getAccountInfo(); // Contains mode, accountId, and dUUID
+        const baseUrl = `https://` + (accountInfo.mode === 'LIVE' ? 'live' : 'demo') + `.services.trading212.com`;
 
-        const color = mode === 'LIVE' ? 'red' : 'blue';
-        sendLog(`--- OPERATING IN ${mode} MODE (Account ID: ${accountId}) ---`, color);
+        const color = accountInfo.mode === 'LIVE' ? 'red' : 'blue';
+        sendLog(`--- OPERATING IN ${accountInfo.mode} MODE (Account ID: ${accountInfo.accountId}) ---`, color);
 
         sendLog('Fetching initial account summary...');
-        let summary = await makeApiCall(`${baseUrl}/rest/trading/invest/v2/accounts/summary`, 'POST', accountId, []);
+        let summary = await makeApiCall(`${baseUrl}/rest/trading/invest/v2/accounts/summary`, 'POST', accountInfo, []);
 
         // --- SELL PHASE ---
         sendLog('Phase 1: Calculating and executing sell orders...');
@@ -137,7 +146,7 @@ async function rebalancePortfolio(targetAllocations) {
                 const sellPayload = { instrumentCode: order.ticker, orderType: "MARKET", quantity: -quantityToSell, timeValidity: "GOOD_TILL_CANCEL" };
 
                 try {
-                    await makeApiCall(`${baseUrl}/rest/public/v2/equity/order`, 'POST', accountId, sellPayload);
+                    await makeApiCall(`${baseUrl}/rest/public/v2/equity/order`, 'POST', accountInfo, sellPayload);
                     sendLog(`    ✔ SUCCESS: Sell order for ${order.ticker} placed.`, 'green');
                 } catch (err) {
                     sendLog(`    ✖ FAILED to sell ${order.ticker}: ${err.message}`, 'red');
@@ -153,7 +162,7 @@ async function rebalancePortfolio(targetAllocations) {
         // --- BUY PHASE ---
         sendLog('Phase 2: Calculating and executing buy orders...');
         sendLog('Re-fetching account state to ensure accurate buy calculations...');
-        summary = await makeApiCall(`${baseUrl}/rest/trading/invest/v2/accounts/summary`, 'POST', accountId, []);
+        summary = await makeApiCall(`${baseUrl}/rest/trading/invest/v2/accounts/summary`, 'POST', accountInfo, []);
 
         let updatedPositions = summary.open.items.reduce((acc, pos) => {
             acc[pos.code] = { value: pos.value, quantity: pos.quantity };
@@ -187,7 +196,7 @@ async function rebalancePortfolio(targetAllocations) {
                 sendLog(`  - Attempting to BUY €${valueToBuy.toFixed(2)} of ${order.ticker}`);
 
                 try {
-                    await makeApiCall(`${baseUrl}/rest/v1/equity/value-order`, 'POST', accountId, buyPayload);
+                    await makeApiCall(`${baseUrl}/rest/v1/equity/value-order`, 'POST', accountInfo, buyPayload);
                     sendLog(`    ✔ SUCCESS: Buy order for ${order.ticker} placed.`, 'green');
                 } catch (err) {
                     if (err.message && err.message.includes('must buy at most')) {
@@ -198,7 +207,7 @@ async function rebalancePortfolio(targetAllocations) {
                             buyPayload.value = adjustedValue;
                             sendLog(`    - ADJUSTED BUY of €${adjustedValue.toFixed(2)} for ${order.ticker}`);
                             try {
-                                await makeApiCall(`${baseUrl}/rest/v1/equity/value-order`, 'POST', accountId, buyPayload);
+                                await makeApiCall(`${baseUrl}/rest/v1/equity/value-order`, 'POST', accountInfo, buyPayload);
                                 sendLog(`    ✔ SUCCESS: Adjusted buy order for ${order.ticker} placed.`, 'green');
                             } catch (retryErr) {
                                 sendLog(`    ✖ FAILED on retry for ${order.ticker}: ${retryErr.message}`, 'red');
@@ -228,6 +237,6 @@ async function rebalancePortfolio(targetAllocations) {
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === 'rebalancePortfolio') {
         rebalancePortfolio(request.payload.allocations);
-        return true; // Indicates an asynchronous response
+        return true;
     }
 });
