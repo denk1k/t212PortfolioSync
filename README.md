@@ -31,7 +31,7 @@ A Chrome extension that syncs your demo/live Trading 212 portfolio to allocation
 ## 📝 Future Plans
 
 -   [ ] **Important:** Implement a more comprehensive retry mechanism for failed API requests.
--   [ ] **Important:** Implement fetching of open orders to include them in rebalancing calculations.
+-   [ ] **Important:** Implement using non-value sell orders to include them in rebalancing calculations.
 -   [ ] **Mild:** Add a check to see if positions can be modified before placing orders and show the status to the user.
 -   [ ] **Mild:** Should add an option to pick a stock into which the money that was impossible to invest into the allocations due to minimum order quantity, would be automatically invested into.
 -   [ ] **Mild:** Develop a Python interop extension to allow for a true algorithmic trading experience.
