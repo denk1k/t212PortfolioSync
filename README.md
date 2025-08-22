@@ -6,7 +6,7 @@ A Chrome extension that syncs your demo/live Trading 212 portfolio to allocation
 ![T212 Portfolio Sync Demo](/docs/media/T212Sync.gif)
 
 ## ✨ Features
-
+*   **Live**: Works in live accounts unlike the T212 Public API.
 *   **Easy to use**: Just import the CSV file and click the "Rebalance" button.
 *   **Simple installation**: Get up and running in a few clicks.
 *   **Works in the background**: The extension handles all operations without interrupting your workflow.
