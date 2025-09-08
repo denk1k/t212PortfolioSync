@@ -1,4 +1,3 @@
-
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
 // A helper to send log updates to the popup
@@ -9,18 +8,23 @@ const sendLog = (message, color = 'black', isFinal = false) => {
     }).catch(() => console.log("Could not send log to popup, it might be closed."));
 };
 
-async function convertTicker(ticker) {
+async function convertTicker(ticker, mode) {
     if (typeof ticker !== 'string' || !ticker.trim()) return null;
 
     const url = "https://ldhni5oled-dsn.algolia.net/1/indexes/*/queries?x-algolia-agent=Algolia%20for%20JavaScript%20(5.29.0)&x-algolia-api-key=cffb67dfbaad8013a4fdd62bf0078fa1&x-algolia-application-id=LDHNI5OLED";
     const headers = { 'accept': 'application/json', 'content-type': 'application/json' };
+
+    const filterString = mode === 'DEMO'
+        ? "(state.demo.enabled:true) AND (state.demo.conditionalVisibility:false) AND (NOT category:CRYPTO)"
+        : "(NOT category:CRYPTO)";
+
     const data = {
         "requests": [{
             "indexName": "instrument.ld4.EN",
             "query": ticker,
             "hitsPerPage": 1,
             "attributesToRetrieve": ["objectID"],
-            "filters": "(state.demo.enabled:true) AND (state.demo.conditionalVisibility:false) AND (NOT category:CRYPTO)",
+            "filters": filterString,
         }]
     };
 
@@ -117,13 +121,15 @@ async function makeApiCall(url, method, { accountId, dUUID }, body = null) {
 // Main function to handle the entire rebalancing logic
 async function rebalancePortfolio(targetAllocations) {
     try {
+        const accountInfo = await getAccountInfo();
+
         const tickerSuffixes = ["_US_EQ", "_EQ_US", "_CA_EQ", "_BE_EQ", "_AT_EQ", "_PT_EQ", "d_EQ", "I_EQ", "l_EQ", "_EQ", "a_EQ", "p_EQ", "e_EQ", "m_EQ", "s_EQ"];
         sendLog('Phase 0: Converting tickers if necessary...');
         for (const alloc of targetAllocations) {
             const needsConversion = !tickerSuffixes.some(suffix => alloc.ticker.endsWith(suffix));
             if (needsConversion) {
                 sendLog(`  - Ticker "${alloc.ticker}" may need conversion.`);
-                const convertedTicker = await convertTicker(alloc.ticker);
+                const convertedTicker = await convertTicker(alloc.ticker, accountInfo.mode);
                 alloc.ticker = convertedTicker;
             }
         }
@@ -133,7 +139,7 @@ async function rebalancePortfolio(targetAllocations) {
         if (targetAllocations.length < originalCount) {
             sendLog(`${originalCount - targetAllocations.length} ticker(s) could not be converted and were removed.`, 'orange');
         }
-        const accountInfo = await getAccountInfo();
+        
         const baseUrl = `https://` + (accountInfo.mode === 'LIVE' ? 'live' : 'demo') + `.services.trading212.com`;
         const color = accountInfo.mode === 'LIVE' ? 'red' : 'blue';
         sendLog(`--- OPERATING IN ${accountInfo.mode} MODE (Account ID: ${accountInfo.accountId}) ---`, color);
