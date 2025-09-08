@@ -1,4 +1,4 @@
-// A helper to pause execution for a specified time
+
 const delay = ms => new Promise(res => setTimeout(res, ms));
 
 // A helper to send log updates to the popup
@@ -8,6 +8,40 @@ const sendLog = (message, color = 'black', isFinal = false) => {
         payload: { message, color, isFinal }
     }).catch(() => console.log("Could not send log to popup, it might be closed."));
 };
+
+async function convertTicker(ticker) {
+    if (typeof ticker !== 'string' || !ticker.trim()) return null;
+
+    const url = "https://ldhni5oled-dsn.algolia.net/1/indexes/*/queries?x-algolia-agent=Algolia%20for%20JavaScript%20(5.29.0)&x-algolia-api-key=cffb67dfbaad8013a4fdd62bf0078fa1&x-algolia-application-id=LDHNI5OLED";
+    const headers = { 'accept': 'application/json', 'content-type': 'application/json' };
+    const data = {
+        "requests": [{
+            "indexName": "instrument.ld4.EN",
+            "query": ticker,
+            "hitsPerPage": 1,
+            "attributesToRetrieve": ["objectID"],
+            "filters": "(state.demo.enabled:true) AND (state.demo.conditionalVisibility:false) AND (NOT category:CRYPTO)",
+        }]
+    };
+
+    try {
+        const response = await fetch(url, { method: 'POST', headers, body: JSON.stringify(data) });
+        if (!response.ok) throw new Error(`API request failed: ${response.statusText}`);
+        const results = await response.json();
+        const objectID = results?.results?.[0]?.hits?.[0]?.objectID;
+
+        if (objectID) {
+            sendLog(`  - Converted ticker "${ticker}" to "${objectID}"`, 'blue');
+            return objectID;
+        } else {
+            sendLog(`  - Ticker "${ticker}" not found.`, 'orange');
+            return null;
+        }
+    } catch (error) {
+        sendLog(`  - Error converting ticker "${ticker}": ${error.message}`, 'red');
+        return null;
+    }
+}
 
 // Function to detect account mode, get account ID, and get dUUID
 async function getAccountInfo() {
@@ -83,6 +117,22 @@ async function makeApiCall(url, method, { accountId, dUUID }, body = null) {
 // Main function to handle the entire rebalancing logic
 async function rebalancePortfolio(targetAllocations) {
     try {
+        const tickerSuffixes = ["_US_EQ", "_EQ_US", "_CA_EQ", "_BE_EQ", "_AT_EQ", "_PT_EQ", "d_EQ", "I_EQ", "l_EQ", "_EQ", "a_EQ", "p_EQ", "e_EQ", "m_EQ", "s_EQ"];
+        sendLog('Phase 0: Converting tickers if necessary...');
+        for (const alloc of targetAllocations) {
+            const needsConversion = !tickerSuffixes.some(suffix => alloc.ticker.endsWith(suffix));
+            if (needsConversion) {
+                sendLog(`  - Ticker "${alloc.ticker}" may need conversion.`);
+                const convertedTicker = await convertTicker(alloc.ticker);
+                alloc.ticker = convertedTicker;
+            }
+        }
+
+        const originalCount = targetAllocations.length;
+        targetAllocations = targetAllocations.filter(a => a.ticker);
+        if (targetAllocations.length < originalCount) {
+            sendLog(`${originalCount - targetAllocations.length} ticker(s) could not be converted and were removed.`, 'orange');
+        }
         const accountInfo = await getAccountInfo();
         const baseUrl = `https://` + (accountInfo.mode === 'LIVE' ? 'live' : 'demo') + `.services.trading212.com`;
         const color = accountInfo.mode === 'LIVE' ? 'red' : 'blue';
