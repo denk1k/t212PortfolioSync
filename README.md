@@ -8,7 +8,7 @@ A Chrome extension that syncs your demo/live Trading 212 portfolio to allocation
 ## ✨ Features
 *   **Live**: Works in live accounts unlike the T212 Public API.
 *   **Resilient**: Less prone to breaking from website updates, as it uses various reverse-engineered T212 APIs, such as the order, order property, and account endpoints, as well as Algolia ticker searching endpoints in the event that a ticker does not match the T212 API's standards.
-*   **Easy to use**: Just import the CSV file and click the "Rebalance" button.
+*   **Easy to use**: Just import the CSV file and click the "Rebalance" button. The tickers will be automatically mapped.
 *   **Simple installation**: Get up and running in a few clicks.
 *   **Works in the background**: The extension handles all operations without interrupting your workflow.
 *   **Precise allocation matching**: Uses both BUY and SELL orders to match your target allocations as closely as possible.
