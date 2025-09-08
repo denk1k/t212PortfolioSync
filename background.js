@@ -9,7 +9,7 @@ const sendLog = (message, color = 'black', isFinal = false) => {
     }).catch(() => console.log("Could not send log to popup, it might be closed."));
 };
 
-// --- Function to detect account mode, get account ID, and get dUUID ---
+// Function to detect account mode, get account ID, and get dUUID
 async function getAccountInfo() {
     const tabs = await chrome.tabs.query({ active: true, url: "*://app.trading212.com/*" });
     if (tabs.length === 0) throw new Error("No active Trading 212 tab found. Please navigate to the T212 web app.");
@@ -45,7 +45,7 @@ async function getAccountInfo() {
                     dUUID = potentialUUID;
                     break;
                 }
-            } catch (e) { /* Ignore malformed cookies */ }
+            } catch (e) {  }
         }
     }
 
@@ -65,10 +65,13 @@ async function makeApiCall(url, method, { accountId, dUUID }, body = null) {
     const cookieString = allCookies.map(cookie => `${cookie.name}=${cookie.value}`).join('; ');
     const headers = {
         'Accept': 'application/json',
-        'Content-Type': 'application/json',
         'Cookie': cookieString,
         'X-Trader-Client': `application=WC4,version=7.83.0,dUUID=${dUUID},accountId=${accountId}`
     };
+
+    if (body) {
+        headers['Content-Type'] = 'application/json';
+    }
 
     const options = { method, headers, body: body ? JSON.stringify(body) : null };
     const response = await fetch(url, options);
@@ -105,7 +108,6 @@ async function rebalancePortfolio(targetAllocations) {
             }
         });
 
-        // --- SELL PHASE ---
         sendLog('Phase 1: Calculating sell orders...');
         const sellOrders = [];
         const allTickers = new Set([...Object.keys(positionDetails), ...targetAllocations.map(a => a.ticker), ...Object.keys(pendingAdjustments)]);
@@ -123,58 +125,70 @@ async function rebalancePortfolio(targetAllocations) {
 
         if (sellOrders.length > 0) {
             sendLog(`Found ${sellOrders.length} sell orders to execute.`, 'orange');
+            const currencyCode = 'EUR';
+
             for (const order of sellOrders) {
-                const valueToSell = Math.abs(order.difference);
-                const remainingValue = order.currentValue - valueToSell;
-                let calculatedQty;
+                try {
+                    const minMaxUrl = `${baseUrl}/rest/v1/equity/value-order/min-max?instrumentCode=${order.ticker}&currencyCode=${currencyCode}`;
+                    const minMaxInfo = await makeApiCall(minMaxUrl, 'GET', accountInfo);
 
-                if (!targetAllocations.some(a => a.ticker === order.ticker && a.allocation > 0) || (remainingValue > 0 && remainingValue < 1.00)) {
-                    calculatedQty = order.currentQuantity;
-                    sendLog(`  - LIQUIDATING ${calculatedQty} of ${order.ticker}`);
-                } else {
-                    calculatedQty = (valueToSell / order.currentValue) * order.currentQuantity;
-                }
+                    const valueToSell = Math.abs(order.difference);
+                    const remainingValue = order.currentValue - valueToSell;
+                    const isLiquidation = !targetAllocations.some(a => a.ticker === order.ticker && a.allocation > 0) || (remainingValue > 0 && remainingValue < 1.00);
 
-                // First attempt with higher precision (4 decimals)
-                let quantityToSell = parseFloat(calculatedQty.toFixed(4));
+                    let quantityToSell;
 
-                if (quantityToSell > 0) {
-                    let sellPayload = { instrumentCode: order.ticker, orderType: "MARKET", quantity: -quantityToSell, timeValidity: "GOOD_TILL_CANCEL" };
-                    try {
-                        sendLog(`  - Attempting to SELL ${quantityToSell} of ${order.ticker}`);
-                        await makeApiCall(`${baseUrl}/rest/public/v2/equity/order`, 'POST', accountInfo, sellPayload);
-                        sendLog(`    ✔ SUCCESS: Sell order for ${order.ticker} placed.`, 'green');
-                    } catch (err) {
-                        // *** FIX: If it's a precision error, retry with lower precision ***
-                        if (err.message && err.message.includes('invalid quantity precision')) {
-                            sendLog(`    ! Precision error hit. Retrying with lower precision...`, 'orange');
-                            const lowerPrecisionQty = Math.trunc(calculatedQty * 100) / 100; // Truncate to 2 decimals
+                    if (isLiquidation) {
+                        quantityToSell = minMaxInfo.maxSellQuantity;
+                        sendLog(`  - LIQUIDATING ${quantityToSell} of ${order.ticker}`);
+                    } else {
+                        if (valueToSell < minMaxInfo.minSell) {
+                            sendLog(`  - SKIPPING sell for ${order.ticker}: intended sell value €${valueToSell.toFixed(2)} is below minimum of €${minMaxInfo.minSell.toFixed(2)}.`, 'orange');
+                            continue;
+                        }
+                        const calculatedQty = (valueToSell / order.currentValue) * order.currentQuantity;
+                        quantityToSell = parseFloat(calculatedQty.toFixed(8));
+                    }
 
-                            if (lowerPrecisionQty > 0) {
-                                sellPayload.quantity = -lowerPrecisionQty;
-                                sendLog(`    - Retrying with adjusted quantity of ${lowerPrecisionQty} for ${order.ticker}`);
-                                try {
-                                    await makeApiCall(`${baseUrl}/rest/public/v2/equity/order`, 'POST', accountInfo, sellPayload);
-                                    sendLog(`    ✔ SUCCESS: Adjusted sell order placed.`, 'green');
-                                } catch (retryErr) {
-                                    sendLog(`    ✖ FAILED on retry for ${order.ticker}: ${retryErr.message}`, 'red');
+                    if (quantityToSell > 0) {
+                        let sellPayload = { instrumentCode: order.ticker, orderType: "MARKET", quantity: -quantityToSell, timeValidity: "GOOD_TILL_CANCEL" };
+                        try {
+                            sendLog(`  - Attempting to SELL ${quantityToSell} of ${order.ticker}`);
+                            await makeApiCall(`${baseUrl}/rest/public/v2/equity/order`, 'POST', accountInfo, sellPayload);
+                            sendLog(`    ✔ SUCCESS: Sell order for ${order.ticker} placed.`, 'green');
+                        } catch (err) {
+                            if (err.message && (err.message.includes('invalid quantity precision') || err.message.includes('Precision error'))) {
+                                sendLog(`    ! Precision error hit. Retrying with lower precision...`, 'orange');
+                                const lowerPrecisionQty = Math.trunc(quantityToSell * 100) / 100;
+
+                                if (lowerPrecisionQty > 0) {
+                                    sellPayload.quantity = -lowerPrecisionQty;
+                                    sendLog(`    - Retrying with adjusted quantity of ${lowerPrecisionQty} for ${order.ticker}`);
+                                    try {
+                                        await makeApiCall(`${baseUrl}/rest/public/v2/equity/order`, 'POST', accountInfo, sellPayload);
+                                        sendLog(`    ✔ SUCCESS: Adjusted sell order placed.`, 'green');
+                                    } catch (retryErr) {
+                                        sendLog(`    ✖ FAILED on retry for ${order.ticker}: ${retryErr.message}`, 'red');
+                                    }
+                                } else {
+                                    sendLog(`    ✖ Adjusted quantity for ${order.ticker} is zero. Skipping.`, 'red');
                                 }
                             } else {
-                                sendLog(`    ✖ Adjusted quantity for ${order.ticker} is zero. Skipping.`, 'red');
+                                sendLog(`    ✖ FAILED to sell ${order.ticker}: ${err.message}`, 'red');
                             }
-                        } else {
-                            // It was a different kind of error
-                            sendLog(`    ✖ FAILED to sell ${order.ticker}: ${err.message}`, 'red');
                         }
+                    } else {
+                        sendLog(`  - SKIPPING sell for ${order.ticker}: calculated quantity is zero or negative.`, 'orange');
                     }
-                    await delay(1000);
+                } catch (apiErr) {
+                    sendLog(`  - ERROR processing sell for ${order.ticker}: ${apiErr.message}`, 'red');
                 }
+                await delay(1000);
             }
         } else {
             sendLog('No sell orders needed.');
         }
 
-        // --- BUY PHASE ---
         sendLog('Phase 2: Calculating buy orders...');
         summary = await makeApiCall(`${baseUrl}/rest/trading/invest/v2/accounts/summary`, 'POST', accountInfo, []);
 
@@ -211,7 +225,6 @@ async function rebalancePortfolio(targetAllocations) {
                         if (match && match[1]) {
                             const adjustedValue = parseFloat(match[1]);
 
-                            // Check if adjusted value is sufficient before retrying
                             if (adjustedValue >= 1.00) {
                                 buyPayload.value = adjustedValue;
                                 sendLog(`    ! API limit hit. Retrying with adjusted value of €${adjustedValue.toFixed(2)}...`, 'orange');
