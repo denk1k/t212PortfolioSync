@@ -19,14 +19,14 @@ A Chrome extension that syncs your demo/live Trading 212 portfolio to allocation
 *   **Free**: No ads, no tracking, no data collection.
 
 ## 📝 The CSV File
-The csv should have two columns, first column containing the name of the ticker and the second one containing the target allocation in decimals.
+The CSV should have two columns, first column containing the name of the ticker and the second one containing the target allocation in decimals.
 Ticker name can be both the full company name, the shorthand name or the API name, so all of these would work:
 ```csv
 Apple,0.2
 MSFT_US_EQ,0.2
 AMZN,0.2
 ```
-It is however more efficient if the direct API name is used as then the need for Algolia API calls is alleviated.
+It is, however, more efficient if the direct API name is used as then the need for Algolia API calls is alleviated.
 
 ## 🚀 Installation
 
